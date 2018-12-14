@@ -1,7 +1,9 @@
 import time
 import json
-from flask import Flask,request, Response,jsonify
+from flask import Flask,request, Response,jsonify, make_response
 from functools import wraps
+import requests
+from requests.auth import HTTPBasicAuth
 
 app = Flask(__name__)
             
@@ -26,19 +28,55 @@ def requires_auth(f):
 
 
 
-@app.route('/')
-def hello():
-    return jsonify({"Success" :True})
+@app.route('/', methods = ['POST'])
+def availability():
+    request_details = request.get_json()
+    SKU_Number = request_details['queryResult']['parameters']['any']
+    SKU_Number = SKU_Number.replace(" ", "")
+    req = request.get_json(silent=True, force=True)
+    headers = {'Content-Type':'application/json'}
+    url = 'http://DDCSPINGBTP01VL.petc.com:8080/inventory/availability'
     
-@app.route('/deleteallnotifications', methods = ['DELETE'])
-@requires_auth
-def deleteallnotifications():
-    Notifications_Search = notification_records.scan()
-    for notification in Notifications_Search["Items"]:
-        notification_records.delete_item(Key = {
-            "ID" : notification["ID"]
-        })
-    return jsonify({"Success" : True})
+    data = {
+    "zipCode": 'true',
+    "shipInfoRequired": False,
+    "inventoryItemsRequest": [
+        {
+            "item": {
+                "itemID": str(SKU_Number),
+                "uom": "EACH"
+            },
+            "storeInfoRequired": True,
+            "distributionGroupName": "SFS_DG"
+        }
+    ],
+    "orgCode": "PETCOUS"
+    }
+    
+    try:
+        #trigger API to get availability for the SKU
+        response = requests.post(url = url, data=json.dumps(data), headers=headers, auth=('273ada0c60a8e1fa', 'fa3d0038c8254c50'))
+        Availability_response = response.json() 
+        #check if the store is being searched for
+        if request_details['queryResult']['parameters']['StoreNumber']:
+            store_number = request_details['queryResult']['parameters']['StoreNumber']
+            
+            number_of_locations = len(Availability_response['response']['itemAvailabilityDetails'][0]['itemAvailabilityAtLocations'])
+            location_array = Availability_response['response']['itemAvailabilityDetails'][0]['itemAvailabilityAtLocations']
+            #loop here that cycles through right store number
+            for i in range(0, number_of_locations):
+                #If store number is found - return BOPUS availability to google assistant
+                if store_number == location_array[i]['locationId']:
+                    return make_response(jsonify({'fulfillmentText': 'Store '+store_number +' has '+ str(location_array[i]['bopusAtp']) +' Pickup Units'}))
+              
+            
+            return make_response(jsonify({'fulfillmentText': 'No store has item ' + SKU_Number}))
+        else:
+            #in case the store was not available - and want enterprise ATP 
+            ATP = str(Availability_response['response']['itemAvailabilityDetails'][0]['shipAtp'])
+            return make_response(jsonify({'fulfillmentText': 'You have '+ATP +' Total Units'}))
+    except Exception as e:
+        return make_response(jsonify({'fulfillmentText': 'Error try again'}))
 
 #endpoint to get all of the notifications in DynamoDB
 @app.route('/getallnotificationrecords')
@@ -188,10 +226,6 @@ def CheckUnreadAlerts(StoreID):
 
 
 if __name__ == "__main__":
-    #Configure the queue for resending notifications
-    app.config.from_object(Config())
-    scheduler = APScheduler()
-    scheduler.init_app(app)
-    scheduler.start()
+
     #Running the flask app
-    app.run(host="0.0.0.0", ssl_context='adhoc') 
+    app.run(host="0.0.0.0",port = 8080) 
