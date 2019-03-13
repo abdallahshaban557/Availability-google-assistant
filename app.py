@@ -33,6 +33,7 @@ def availability():
     request_details = request.get_json()
     SKU_Number = request_details['queryResult']['parameters']['any']
     SKU_Number = SKU_Number.replace(" ", "")
+    SKU_Number = SKU_Number.replace("-","")
     req = request.get_json(silent=True, force=True)
     headers = {'Content-Type':'application/json'}
     url = 'http://DDCSPINGBTP01VL.petc.com:8080/inventory/availability'
